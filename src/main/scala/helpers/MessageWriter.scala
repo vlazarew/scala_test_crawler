@@ -1,5 +1,8 @@
-import MessageType.MessageType
-import TestCrawler.outputFile
+package helpers
+
+import crawler.TestCrawler.outputFile
+import enums.MessageType
+import enums.MessageType.MessageType
 import org.json4s.DefaultFormats
 import org.json4s.jackson.Serialization
 

@@ -1,3 +1,7 @@
+package crawler
+
+import enums.{LogLevel, MessageType}
+import helpers.MessageWriter
 import org.json4s.JNothing
 import org.json4s.JsonDSL._
 import org.json4s.jackson.compactJson
@@ -79,6 +83,7 @@ object TestCrawler extends App {
 
     val item = if (config.fail) {
       ("message" -> "Critical failure occurred") ~ ("level" -> LogLevel.CRITICAL.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
+      throw new Exception("Critical failure occurred")
     } else {
       ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
     }

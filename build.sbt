@@ -18,3 +18,8 @@ mainClass in(Compile, run) := Some("crawler.TestCrawler")
 
 // set the main class for packaging the main jar
 mainClass in(Compile, packageBin) := Some("crawler.TestCrawler")
+
+assemblyMergeStrategy in assembly := {
+  case PathList("META-INF", _@_*) => MergeStrategy.discard
+  case _ => MergeStrategy.first
+}

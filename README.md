@@ -13,3 +13,8 @@
 ### Сборка проекта
 
 `sbt assembly` и вас ждет jar файл, который можно запустить, вуаля
+
+### Касаемо Docker-образа
+1. `docker build --tag scala-docker .` - соберет вам все как надо
+2. `docker run -it scala-docker list` - выведет список сборщиков
+3. `docker run -it scala-docker schedule <args>` - запустить сборщик с переданными аргментами

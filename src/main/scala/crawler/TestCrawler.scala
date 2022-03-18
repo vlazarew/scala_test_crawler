@@ -14,15 +14,18 @@ import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.util.Random
 
+
 case class TestCrawler(requests: Int = 1,
                        items: Int = 100,
                        errors: Int = 0,
                        workTime: Int = 0,
                        fail: Boolean = false,
-                       fieldFrequency: Int = 100)
+                       fieldFrequency: Int = 100,
+                       getCrawlerNames: Boolean = false)
 
 object TestCrawler extends App {
   val name = "scala_test_crawler"
+
   val DEMO_URL = "https://demo-site.at.ispras.ru/"
 
   private val fileName = "outputFile.jsonl"
@@ -54,10 +57,12 @@ object TestCrawler extends App {
     weighted(freq.toIterator, scala.util.Random.nextInt(freq.values.sum))
   }
 
-
-  initCrawler(config)
-
-  processEvents()
+  if (config.getCrawlerNames) {
+    println(name)
+  } else {
+    initCrawler(config)
+    processEvents()
+  }
 
   private def getConfig: TestCrawler = {
     new OptionParser[TestCrawler] {
@@ -76,6 +81,7 @@ object TestCrawler extends App {
         })
       }
       optl[Int]("", "--fieldFrequency=FIELD_FREQUENCY") { (value, config) => config.copy(fieldFrequency = value.getOrElse(100)) }
+      flag("", "--crawlerNames") { value => value.copy(getCrawlerNames = true) }
     }.parse(args, TestCrawler())
   }
 

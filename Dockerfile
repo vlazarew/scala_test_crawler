@@ -2,6 +2,7 @@ FROM openjdk:11
 
 WORKDIR /app
 
-COPY target/scala-2.13/scala-test-crawler-assembly-0.1.0-SNAPSHOT.jar /app/project.jar
+COPY scala-test-crawler.jar /app/project.jar
+COPY /scrapy.sh /app/scrapy.sh
 
-CMD ["java","-jar","project.jar"]
+ENTRYPOINT ["./scrapy.sh"]

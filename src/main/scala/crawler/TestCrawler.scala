@@ -1,28 +1,31 @@
 package crawler
 
 import enums.{LogLevel, MessageType}
-import helpers.MessageWriter
+import helpers.{ArgsParser, MessageWriter}
 import org.json4s.JNothing
 import org.json4s.JsonDSL._
 import org.json4s.jackson.compactJson
-import org.sellmerfud.optparse.OptionParser
 import scalaj.http.Http
 
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import scala.annotation.tailrec
 import scala.collection.mutable
+import scala.reflect.runtime.universe.typeOf
 import scala.util.Random
+
 
 case class TestCrawler(requests: Int = 1,
                        items: Int = 100,
                        errors: Int = 0,
                        workTime: Int = 0,
                        fail: Boolean = false,
-                       fieldFrequency: Int = 100)
+                       fieldFrequency: Int = 100,
+                       getCrawlerNames: Boolean = false)
 
 object TestCrawler extends App {
   val name = "scala_test_crawler"
+
   val DEMO_URL = "https://demo-site.at.ispras.ru/"
 
   private val fileName = "outputFile.jsonl"
@@ -34,7 +37,11 @@ object TestCrawler extends App {
     Files.createFile(Path.of(fileName))
   }
 
-  val config = getConfig
+  private val crawlerDefinition = typeOf[TestCrawler].members.withFilter(!_.isMethod)
+    .map(el => (el.name.toString.trim, el.typeSignature)).toMap
+
+  val crawlerArgs = ArgsParser.parse(args, crawlerDefinition)
+  val config = getConfig(crawlerArgs)
 
   var completeRequests = 0
   var crawledItems = 0
@@ -54,41 +61,36 @@ object TestCrawler extends App {
     weighted(freq.toIterator, scala.util.Random.nextInt(freq.values.sum))
   }
 
+  if (config.getCrawlerNames) {
+    println(name)
+  } else {
+    initCrawler(config)
+    processEvents()
+  }
 
-  initCrawler(config)
-
-  processEvents()
-
-  private def getConfig: TestCrawler = {
-    new OptionParser[TestCrawler] {
-      optl[Int]("", "--requests=REQUESTS_COUNT") { (value, config) => config.copy(requests = value.getOrElse(1)) }
-      optl[Int]("", "--items=ITEMS_COUNT") { (value, config) => config.copy(items = value.getOrElse(100)) }
-      optl[Int]("", "--errors=ERRORS_COUNT") { (value, config) => config.copy(errors = value.getOrElse(0)) }
-      optl[Int]("", "--workTime=WORK_TIME") { (value, config) => config.copy(workTime = value.getOrElse(0)) }
-      optl[String]("", "--fail=FAIL") { (value, config) =>
-        config.copy(fail = try {
-          value match {
-            case Some(value) => value.toBoolean
-            case None => false
-          }
-        } catch {
-          case _: Throwable => false
-        })
-      }
-      optl[Int]("", "--fieldFrequency=FIELD_FREQUENCY") { (value, config) => config.copy(fieldFrequency = value.getOrElse(100)) }
-    }.parse(args, TestCrawler())
+  private def getConfig(crawlerArgs: Map[String, Any]): TestCrawler = {
+    TestCrawler(
+      requests = crawlerArgs.getOrElse("requests", 1).asInstanceOf[Int],
+      items = crawlerArgs.getOrElse("items", 100).asInstanceOf[Int],
+      errors = crawlerArgs.getOrElse("errors", 0).asInstanceOf[Int],
+      workTime = crawlerArgs.getOrElse("workTime", 0).asInstanceOf[Int],
+      fail = crawlerArgs.getOrElse("fail", false).asInstanceOf[Boolean],
+      fieldFrequency = crawlerArgs.getOrElse("fieldFrequency", 100).asInstanceOf[Int],
+      getCrawlerNames = crawlerArgs.getOrElse("getCrawlerNames", false).asInstanceOf[Boolean]
+    )
   }
 
   def initCrawler(config: TestCrawler): Unit = {
 
     val item = if (config.fail) {
       ("message" -> "Critical failure occurred") ~ ("level" -> LogLevel.CRITICAL.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
+      MessageWriter.writeMessage(MessageType.Finish, s"Critical Error")
       throw new Exception("Critical failure occurred")
     } else {
       ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
     }
 
-    MessageWriter.writeMessage(MessageType.LOG, compactJson(item))
+    MessageWriter.writeMessage(MessageType.Log, compactJson(item))
   }
 
   def makeTestRequest(): Unit = {
@@ -100,7 +102,7 @@ object TestCrawler extends App {
     val item = ("_url" -> DEMO_URL) ~ ("_timestamp" -> startTime) ~ ("method" -> request.method) ~
       ("status" -> response.code) ~ ("duration" -> ((Instant.now().getNano - startTime) / 10e9)) ~
       ("rs" -> response.body.getBytes().length)
-    MessageWriter.writeMessage(MessageType.REQ, compactJson(item))
+    MessageWriter.writeMessage(MessageType.Request, compactJson(item))
 
     processEvents()
   }
@@ -116,7 +118,7 @@ object TestCrawler extends App {
 
     val item = ("_url" -> DEMO_URL) ~ ("_timestamp" -> Instant.now().getEpochSecond) ~ ("_attachments" -> attachments) ++
       (if (value.isDefined) value else JNothing)
-    MessageWriter.writeMessage(MessageType.ITM, compactJson(item))
+    MessageWriter.writeMessage(MessageType.Item, compactJson(item))
 
     processEvents()
   }
@@ -124,7 +126,7 @@ object TestCrawler extends App {
   def makeTestError(): Unit = {
     crawledErrors += 1
     val item = ("message" -> s"Test error #$crawledErrors") ~ ("level" -> LogLevel.ERROR.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
-    MessageWriter.writeMessage(MessageType.LOG, compactJson(item))
+    MessageWriter.writeMessage(MessageType.Log, compactJson(item))
     processEvents()
   }
 
@@ -135,7 +137,7 @@ object TestCrawler extends App {
 
     getNextEvent match {
       case Some(value) => value()
-      case None => MessageWriter.writeMessage(MessageType.FIN, s"Successful finished")
+      case None => MessageWriter.writeMessage(MessageType.Finish, s"Successful finished")
     }
   }
 

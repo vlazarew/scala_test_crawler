@@ -2,11 +2,13 @@ ThisBuild / version := "0.1.0-SNAPSHOT"
 
 ThisBuild / scalaVersion := "2.13.8"
 
-val argsParser = "org.sellmerfud" %% "optparse" % "2.2"
+val argsParser = Seq("org.sellmerfud" %% "optparse" % "2.2",
+                     "commons-cli" % "commons-cli" % "1.5.0")
 val json4sJackson = "org.json4s" %% "json4s-jackson" % "4.1.0-M1"
 val http = "org.scalaj" %% "scalaj-http" % "2.4.2"
 
-libraryDependencies ++= Seq(argsParser, json4sJackson, http)
+libraryDependencies ++= Seq(json4sJackson, http) ++ argsParser
+//libraryDependencies ++= Seq(argsParser, json4sJackson, http)
 
 lazy val testCrawler = (project in file("."))
   .settings(

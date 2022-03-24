@@ -14,7 +14,8 @@ object MessageWriter {
 
   private def getMessage(messageType: MessageType, content: String) = {
     Serialization.write(messageType match {
-      case MessageType.FIN => messageType.toString -> ("outcome" -> content)
+      case MessageType.Finish => messageType.toString -> ("outcome" -> content)
+      case MessageType.Media => messageType.toString -> ("value" -> content)
       case _ => messageType.toString -> content
     })
   }

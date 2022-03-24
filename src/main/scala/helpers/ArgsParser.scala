@@ -24,10 +24,14 @@ object ArgsParser {
 
         val possibleType = crawlerDefinition.get(key)
         val modifiedValue = possibleType match {
-          case Some(fieldType) => fieldType.toString match {
-            case "Int" => value.toInt
-            case "Long" => value.toLong
-            case "Boolean" => value.toBoolean
+          case Some(fieldType) => try {
+            fieldType.toString match {
+              case "Int" => value.toInt
+              case "Long" => value.toLong
+              case "Boolean" => value.toBoolean
+            }
+          } catch {
+            case _: Throwable => throw new Exception(s"field \"$key\" must be ${fieldType.toString} type and we cannot cast value \"$value\" to them.")
           }
           case None => value
         }

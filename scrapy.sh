@@ -6,7 +6,6 @@ case $command in
   exec java -jar project.jar --crawlerNames
   ;;
 "schedule")
-  echo "spider-crawl start"
   exec java -jar project.jar ${@:2}
   ;;
 

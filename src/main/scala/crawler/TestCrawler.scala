@@ -4,7 +4,6 @@ import enums.{LogLevel, MessageType}
 import helpers.{ArgsParser, MessageWriter}
 import org.json4s.JNothing
 import org.json4s.JsonDSL._
-import org.json4s.jackson.compactJson
 import scalaj.http.Http
 
 import java.nio.file.{Files, Path}
@@ -83,26 +82,26 @@ object TestCrawler extends App {
   def initCrawler(config: TestCrawler): Unit = {
 
     val item = if (config.fail) {
-      ("message" -> "Critical failure occurred") ~ ("level" -> LogLevel.CRITICAL.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
+      ("message" -> "Critical failure occurred") ~ ("level" -> LogLevel.CRITICAL.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
       MessageWriter.writeMessage(MessageType.Finish, s"Critical Error")
       throw new Exception("Critical failure occurred")
     } else {
-      ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
+      ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
     }
 
-    MessageWriter.writeMessage(MessageType.Log, compactJson(item))
+    MessageWriter.writeMessage(MessageType.Log, item)
   }
 
   def makeTestRequest(): Unit = {
     completeRequests += 1
     val request = Http(DEMO_URL)
-    val startTime = Instant.now().getNano
+    val startTime = Instant.now().toEpochMilli
     val response = request.asString
 
     val item = ("_url" -> DEMO_URL) ~ ("_timestamp" -> startTime) ~ ("method" -> request.method) ~
-      ("status" -> response.code) ~ ("duration" -> ((Instant.now().getNano - startTime) / 10e9)) ~
-      ("rs" -> response.body.getBytes().length)
-    MessageWriter.writeMessage(MessageType.Request, compactJson(item))
+      ("status" -> response.code) ~ ("duration" -> ((Instant.now().toEpochMilli - startTime) / 10e6)) ~
+      ("response_size" -> response.body.getBytes().length)
+    MessageWriter.writeMessage(MessageType.Request, item)
 
     processEvents()
   }
@@ -116,17 +115,17 @@ object TestCrawler extends App {
 
     val value = if (random.nextInt(100) >= (100 - config.fieldFrequency)) Some("value" -> s"Test item #$crawledItems") else None
 
-    val item = ("_url" -> DEMO_URL) ~ ("_timestamp" -> Instant.now().getEpochSecond) ~ ("_attachments" -> attachments) ++
+    val item = ("_url" -> DEMO_URL) ~ ("_timestamp" -> Instant.now().toEpochMilli) ~ ("_attachments" -> attachments) ++
       (if (value.isDefined) value else JNothing)
-    MessageWriter.writeMessage(MessageType.Item, compactJson(item))
+    MessageWriter.writeMessage(MessageType.Item, item)
 
     processEvents()
   }
 
   def makeTestError(): Unit = {
     crawledErrors += 1
-    val item = ("message" -> s"Test error #$crawledErrors") ~ ("level" -> LogLevel.ERROR.toString) ~ ("timestamp" -> Instant.now().getEpochSecond)
-    MessageWriter.writeMessage(MessageType.Log, compactJson(item))
+    val item = ("message" -> s"Test error #$crawledErrors") ~ ("level" -> LogLevel.ERROR.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
+    MessageWriter.writeMessage(MessageType.Log, item)
     processEvents()
   }
 

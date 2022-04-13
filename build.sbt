@@ -7,8 +7,9 @@ val argsParser = Seq("org.sellmerfud" %% "optparse" % "2.2",
 val json4sJackson = "org.json4s" %% "json4s-jackson" % "4.1.0-M1"
 val http = "org.scalaj" %% "scalaj-http" % "2.4.2"
 
-libraryDependencies ++= Seq(json4sJackson, http) ++ argsParser
-//libraryDependencies ++= Seq(argsParser, json4sJackson, http)
+val akkaActor = "com.typesafe.akka" %% "akka-actor" % "2.6.19"
+
+libraryDependencies ++= Seq(json4sJackson, http, akkaActor) ++ argsParser
 
 lazy val testCrawler = (project in file("."))
   .settings(

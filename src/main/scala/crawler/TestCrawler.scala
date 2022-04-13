@@ -1,5 +1,6 @@
 package crawler
 
+import akka.actor.ActorSystem
 import enums.{LogLevel, MessageType}
 import helpers.{ArgsParser, MessageWriter}
 import org.json4s.JNothing
@@ -7,12 +8,17 @@ import org.json4s.JsonDSL._
 import scalaj.http.Http
 
 import java.nio.file.{Files, Path}
-import java.time.Instant
+import java.time.{Duration, Instant}
 import scala.annotation.tailrec
 import scala.collection.mutable
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.reflect.runtime.universe.typeOf
 import scala.util.Random
 
+case class Metrics(time: Long = 0,
+                   itemsCount: Long = 0,
+                   requestsCount: Long = 0,
+                   errorsCount: Long = 0)
 
 case class TestCrawler(requests: Int = 1,
                        items: Int = 100,
@@ -36,15 +42,26 @@ object TestCrawler extends App {
     Files.createFile(Path.of(fileName))
   }
 
+  var metrics = Metrics()
+
+  val startCrawlTime = Instant.now().getEpochSecond
+
+  val actorSystem = ActorSystem()
+  val scheduler = actorSystem.scheduler
+  implicit val executor: ExecutionContextExecutor = actorSystem.dispatcher
+
+  val metricsNotifier = scheduler.scheduleAtFixedRate(initialDelay = Duration.ofMinutes(1), interval = Duration.ofMinutes(1),
+    runnable = () => {
+      val metricsInfo = createMetricsBody(Instant.now().getEpochSecond)
+      MessageWriter.writeMessage(MessageType.Stats, metricsInfo)
+    }, executor)
+
   private val crawlerDefinition = typeOf[TestCrawler].members.withFilter(!_.isMethod)
     .map(el => (el.name.toString.trim, el.typeSignature)).toMap
 
   val crawlerArgs = ArgsParser.parse(args, crawlerDefinition)
   val config = getConfig(crawlerArgs)
 
-  var completeRequests = 0
-  var crawledItems = 0
-  var crawledErrors = 0
   val delay = (config.workTime * 1000) / (config.requests + config.items + config.errors)
 
   def weightedFreq[A](freq: mutable.LinkedHashMap[A, Int]): A = {
@@ -60,11 +77,16 @@ object TestCrawler extends App {
     weighted(freq.toIterator, scala.util.Random.nextInt(freq.values.sum))
   }
 
-  if (config.getCrawlerNames) {
-    println(name)
-  } else {
-    initCrawler(config)
-    processEvents()
+  Future {
+    if (config.getCrawlerNames) {
+      println(name)
+    } else {
+      initCrawler(config)
+      processEvents()
+    }
+
+    metricsNotifier.cancel()
+    System.exit(0)
   }
 
   private def getConfig(crawlerArgs: Map[String, Any]): TestCrawler = {
@@ -84,6 +106,11 @@ object TestCrawler extends App {
     val item = if (config.fail) {
       ("message" -> "Critical failure occurred") ~ ("level" -> LogLevel.CRITICAL.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
       MessageWriter.writeMessage(MessageType.Finish, s"Critical Error")
+
+      val failTime = Instant.now().getEpochSecond
+      val metricsInfo = createMetricsBody(failTime, isCritical = true)
+
+      MessageWriter.writeMessage(MessageType.Stats, metricsInfo)
       throw new Exception("Critical failure occurred")
     } else {
       ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
@@ -92,8 +119,16 @@ object TestCrawler extends App {
     MessageWriter.writeMessage(MessageType.Log, item)
   }
 
+  private def createMetricsBody(finishTime: Long, isCritical: Boolean = false) = {
+    ("elapsed_time_seconds" -> (finishTime - startCrawlTime)) ~ ("item_scraped_count" -> metrics.itemsCount) ~
+      ("requests_count" -> metrics.requestsCount) ~ ("log_count_ERROR" -> metrics.errorsCount) ~ ("log_count_CRITICAL" -> (if (isCritical) 1 else 0)) ~
+      ("_timestamp" -> finishTime)
+  }
+
   def makeTestRequest(): Unit = {
-    completeRequests += 1
+    synchronized {
+      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime, metrics.itemsCount, requestsCount = metrics.requestsCount + 1, errorsCount = metrics.errorsCount)
+    }
     val request = Http(DEMO_URL)
     val startTime = Instant.now().toEpochMilli
     val response = request.asString
@@ -107,13 +142,15 @@ object TestCrawler extends App {
   }
 
   def makeTestItem(): Unit = {
-    crawledItems += 1
+    synchronized {
+      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime, metrics.itemsCount + 1, requestsCount = metrics.requestsCount, errorsCount = metrics.errorsCount)
+    }
     val countOfAttachments = random.nextInt(4)
 
     val attachments = for (_ <- 1 to countOfAttachments)
       yield ("path" -> "s3://sitemaps/some") ~ ("filename" -> "some") ~ ("checksum" -> "68b329da9893e34099c7d8ad5cb9c940")
 
-    val value = if (random.nextInt(100) >= (100 - config.fieldFrequency)) Some("value" -> s"Test item #$crawledItems") else None
+    val value = if (random.nextInt(100) >= (100 - config.fieldFrequency)) Some("value" -> s"Test item #${metrics.itemsCount}") else None
 
     val item = ("_url" -> DEMO_URL) ~ ("_timestamp" -> Instant.now().toEpochMilli) ~ ("_attachments" -> attachments) ++
       (if (value.isDefined) value else JNothing)
@@ -123,8 +160,10 @@ object TestCrawler extends App {
   }
 
   def makeTestError(): Unit = {
-    crawledErrors += 1
-    val item = ("message" -> s"Test error #$crawledErrors") ~ ("level" -> LogLevel.ERROR.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
+    synchronized {
+      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime, metrics.itemsCount, requestsCount = metrics.requestsCount, errorsCount = metrics.errorsCount + 1)
+    }
+    val item = ("message" -> s"Test error #${metrics.errorsCount}") ~ ("level" -> LogLevel.ERROR.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
     MessageWriter.writeMessage(MessageType.Log, item)
     processEvents()
   }
@@ -136,15 +175,18 @@ object TestCrawler extends App {
 
     getNextEvent match {
       case Some(value) => value()
-      case None => MessageWriter.writeMessage(MessageType.Finish, s"Successful finished")
+      case None =>
+        val metricsInfo = createMetricsBody(Instant.now().getEpochSecond)
+        MessageWriter.writeMessage(MessageType.Stats, metricsInfo)
+        MessageWriter.writeMessage(MessageType.Finish, s"Successful finished")
     }
   }
 
   private def getNextEvent = {
     val possibleEvents = Seq(
-      if (completeRequests < config.requests) Some(() => makeTestRequest()) else None,
-      if (crawledItems < config.items) Some(() => makeTestItem()) else None,
-      if (crawledErrors < config.errors) Some(() => makeTestError()) else None
+      if (metrics.requestsCount < config.requests) Some(() => makeTestRequest()) else None,
+      if (metrics.itemsCount < config.items) Some(() => makeTestItem()) else None,
+      if (metrics.errorsCount < config.errors) Some(() => makeTestError()) else None
     ).filter(_.isDefined)
 
     possibleEvents.length match {

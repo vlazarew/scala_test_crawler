@@ -44,7 +44,7 @@ object TestCrawler extends App {
 
   var metrics = Metrics()
 
-  val startCrawlTime = Instant.now().getEpochSecond
+  val startCrawlTime = Instant.now()
 
   val actorSystem = ActorSystem()
   val scheduler = actorSystem.scheduler
@@ -52,7 +52,7 @@ object TestCrawler extends App {
 
   val metricsNotifier = scheduler.scheduleAtFixedRate(initialDelay = Duration.ofMinutes(1), interval = Duration.ofMinutes(1),
     runnable = () => {
-      val metricsInfo = createMetricsBody(Instant.now().getEpochSecond)
+      val metricsInfo = createMetricsBody(Instant.now())
       MessageWriter.writeMessage(MessageType.Stats, metricsInfo)
     }, executor)
 
@@ -107,7 +107,7 @@ object TestCrawler extends App {
       ("message" -> "Critical failure occurred") ~ ("level" -> LogLevel.CRITICAL.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
       MessageWriter.writeMessage(MessageType.Finish, s"Critical Error")
 
-      val failTime = Instant.now().getEpochSecond
+      val failTime = Instant.now()
       val metricsInfo = createMetricsBody(failTime, isCritical = true)
 
       MessageWriter.writeMessage(MessageType.Stats, metricsInfo)
@@ -119,15 +119,15 @@ object TestCrawler extends App {
     MessageWriter.writeMessage(MessageType.Log, item)
   }
 
-  private def createMetricsBody(finishTime: Long, isCritical: Boolean = false) = {
-    ("elapsed_time_seconds" -> (finishTime - startCrawlTime)) ~ ("item_scraped_count" -> metrics.itemsCount) ~
+  private def createMetricsBody(finishTime: Instant, isCritical: Boolean = false) = {
+    ("elapsed_time_seconds" -> (finishTime.getEpochSecond - startCrawlTime.getEpochSecond)) ~ ("item_scraped_count" -> metrics.itemsCount) ~
       ("requests_count" -> metrics.requestsCount) ~ ("log_count_ERROR" -> metrics.errorsCount) ~ ("log_count_CRITICAL" -> (if (isCritical) 1 else 0)) ~
-      ("_timestamp" -> finishTime)
+      ("_timestamp" -> finishTime.toEpochMilli)
   }
 
   def makeTestRequest(): Unit = {
     synchronized {
-      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime, metrics.itemsCount, requestsCount = metrics.requestsCount + 1, errorsCount = metrics.errorsCount)
+      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime.getEpochSecond, metrics.itemsCount, requestsCount = metrics.requestsCount + 1, errorsCount = metrics.errorsCount)
     }
     val request = Http(DEMO_URL)
     val startTime = Instant.now().toEpochMilli
@@ -143,7 +143,7 @@ object TestCrawler extends App {
 
   def makeTestItem(): Unit = {
     synchronized {
-      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime, metrics.itemsCount + 1, requestsCount = metrics.requestsCount, errorsCount = metrics.errorsCount)
+      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime.getEpochSecond, metrics.itemsCount + 1, requestsCount = metrics.requestsCount, errorsCount = metrics.errorsCount)
     }
     val countOfAttachments = random.nextInt(4)
 
@@ -161,7 +161,7 @@ object TestCrawler extends App {
 
   def makeTestError(): Unit = {
     synchronized {
-      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime, metrics.itemsCount, requestsCount = metrics.requestsCount, errorsCount = metrics.errorsCount + 1)
+      metrics = metrics.copy(time = Instant.now().getEpochSecond - startCrawlTime.getEpochSecond, metrics.itemsCount, requestsCount = metrics.requestsCount, errorsCount = metrics.errorsCount + 1)
     }
     val item = ("message" -> s"Test error #${metrics.errorsCount}") ~ ("level" -> LogLevel.ERROR.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
     MessageWriter.writeMessage(MessageType.Log, item)
@@ -176,7 +176,7 @@ object TestCrawler extends App {
     getNextEvent match {
       case Some(value) => value()
       case None =>
-        val metricsInfo = createMetricsBody(Instant.now().getEpochSecond)
+        val metricsInfo = createMetricsBody(Instant.now())
         MessageWriter.writeMessage(MessageType.Stats, metricsInfo)
         MessageWriter.writeMessage(MessageType.Finish, s"Successful finished")
     }

@@ -7,11 +7,13 @@ import org.json4s.JNothing
 import org.json4s.JsonDSL._
 import scalaj.http.Http
 
+import java.io._
 import java.nio.file.{Files, Path}
 import java.time.{Duration, Instant}
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.io.Source
 import scala.reflect.runtime.universe.typeOf
 import scala.util.Random
 
@@ -23,7 +25,7 @@ case class Metrics(time: Long = 0,
 case class TestCrawler(requests: Int = 1,
                        items: Int = 100,
                        errors: Int = 0,
-                       workTime: Int = 0,
+                       workTime: Int = 60,
                        fail: Boolean = false,
                        fieldFrequency: Int = 100,
                        getCrawlerNames: Boolean = false)
@@ -41,6 +43,15 @@ object TestCrawler extends App {
     Files.deleteIfExists(Path.of(fileName))
     Files.createFile(Path.of(fileName))
   }
+
+  Runtime.getRuntime().addShutdownHook(new Thread {
+    override def run = {
+     //println("---------SHUTDOWN HOOK!!!!---------")
+      val pw = new PrintWriter(new File("test.txt" ))
+      pw.write(s"${metrics.itemsCount}")
+      pw.close
+    }
+  })
 
   var metrics = Metrics()
 
@@ -115,6 +126,13 @@ object TestCrawler extends App {
     } else {
       ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
     }
+
+
+    val bufferedSource = Source.fromFile("test.txt")
+    for (line <- bufferedSource.getLines) {
+      println(f"Previous itemsCount: ${line}")
+    }
+    bufferedSource.close
 
     MessageWriter.writeMessage(MessageType.Log, item)
   }

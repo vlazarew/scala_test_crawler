@@ -1,6 +1,7 @@
 package crawler
 
-import akka.actor.ActorSystem
+import akka.actor.{ActorSystem, CoordinatedShutdown}
+import com.typesafe.config.ConfigFactory
 import enums.{LogLevel, MessageType}
 import helpers.{ArgsParser, MessageWriter}
 import org.json4s.JNothing
@@ -8,14 +9,17 @@ import org.json4s.JsonDSL._
 import scalaj.http.Http
 
 import java.io._
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths}
 import java.time.{Duration, Instant}
+import java.util.concurrent.atomic.AtomicBoolean
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.io.Source
 import scala.reflect.runtime.universe.typeOf
 import scala.util.Random
+import sun.misc.SignalHandler
+import sun.misc.Signal
 
 case class Metrics(time: Long = 0,
                    itemsCount: Long = 0,
@@ -30,7 +34,7 @@ case class TestCrawler(requests: Int = 1,
                        fieldFrequency: Int = 100,
                        getCrawlerNames: Boolean = false)
 
-object TestCrawler extends App {
+object TestCrawler extends App with SignalHandler{
   val name = "scala_test_crawler"
 
   val DEMO_URL = "https://demo-site.at.ispras.ru/"
@@ -44,14 +48,25 @@ object TestCrawler extends App {
     Files.createFile(Path.of(fileName))
   }
 
-  Runtime.getRuntime().addShutdownHook(new Thread {
+  /*Runtime.getRuntime().addShutdownHook(new Thread {
     override def run = {
-     //println("---------SHUTDOWN HOOK!!!!---------")
-      val pw = new PrintWriter(new File("test.txt" ))
+      MessageWriter.writeMessage(MessageType.Log, "---------SHUTDOWN HOOK!!!!---------")
+      val jobDirPath = Paths.get("./scrapy_data")
+      val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath)
+      else jobDirPath
+      val pw = new PrintWriter(new File(s"$jobDir/test.txt"))
       pw.write(s"${metrics.itemsCount}")
       pw.close
     }
-  })
+  })*/
+
+  val SIGINT = "INT"
+  val SIGTERM = "TERM"
+  val terminated = new AtomicBoolean(false)
+
+  // регистрируем сам App объект, как обработчик сигналов
+  Signal.handle(new Signal(SIGINT), this)
+  Signal.handle(new Signal(SIGTERM), this)
 
   var metrics = Metrics()
 
@@ -60,6 +75,25 @@ object TestCrawler extends App {
   val actorSystem = ActorSystem()
   val scheduler = actorSystem.scheduler
   implicit val executor: ExecutionContextExecutor = actorSystem.dispatcher
+
+  //hook для akka, будет использоваться для любых остановок, не только по сигналам
+  actorSystem.registerOnTermination {
+    System.exit(0)
+  }
+
+  // собственно обработчик
+  override def handle(signal: Signal): Unit = {
+    if (terminated.compareAndSet(false, true) && List(SIGINT, SIGTERM).contains(signal.getName)) {
+      MessageWriter.writeMessage(MessageType.Log, "---------SHUTDOWN HOOK!!!!---------")
+      val jobDirPath = Paths.get("/scrapy_data")
+      val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath)
+      else jobDirPath
+      val pw = new PrintWriter(new File(s"$jobDir/test.txt"))
+      pw.write(s"${metrics.itemsCount}")
+      pw.close
+      actorSystem.terminate()
+    }
+  }
 
   val metricsNotifier = scheduler.scheduleAtFixedRate(initialDelay = Duration.ofMinutes(1), interval = Duration.ofMinutes(1),
     runnable = () => {
@@ -105,7 +139,7 @@ object TestCrawler extends App {
       requests = crawlerArgs.getOrElse("requests", 1).asInstanceOf[Int],
       items = crawlerArgs.getOrElse("items", 100).asInstanceOf[Int],
       errors = crawlerArgs.getOrElse("errors", 0).asInstanceOf[Int],
-      workTime = crawlerArgs.getOrElse("workTime", 0).asInstanceOf[Int],
+      workTime = crawlerArgs.getOrElse("workTime", 60).asInstanceOf[Int],
       fail = crawlerArgs.getOrElse("fail", false).asInstanceOf[Boolean],
       fieldFrequency = crawlerArgs.getOrElse("fieldFrequency", 100).asInstanceOf[Int],
       getCrawlerNames = crawlerArgs.getOrElse("getCrawlerNames", false).asInstanceOf[Boolean]
@@ -127,12 +161,18 @@ object TestCrawler extends App {
       ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
     }
 
-
-    val bufferedSource = Source.fromFile("test.txt")
-    for (line <- bufferedSource.getLines) {
-      println(f"Previous itemsCount: ${line}")
+    /** READ FROM FILE */
+    val filename = "/scrapy_data/test.txt"
+    try {
+      val bufferedSource = Source.fromFile(filename)
+      for (line <- bufferedSource.getLines) {
+        MessageWriter.writeMessage(MessageType.Log, f"Previous itemsCount: ${line}")
+      }
+      bufferedSource.close()
+    } catch {
+      case e: FileNotFoundException => MessageWriter.writeMessage(MessageType.Log, "Couldn't find that file.")
+      case e: IOException => MessageWriter.writeMessage(MessageType.Log, "Got an IOException!")
     }
-    bufferedSource.close
 
     MessageWriter.writeMessage(MessageType.Log, item)
   }

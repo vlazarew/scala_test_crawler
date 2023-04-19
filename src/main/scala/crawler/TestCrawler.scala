@@ -1,12 +1,13 @@
 package crawler
 
-import akka.actor.{ActorSystem, CoordinatedShutdown}
-import com.typesafe.config.ConfigFactory
+import akka.actor.ActorSystem
 import enums.{LogLevel, MessageType}
 import helpers.{ArgsParser, MessageWriter}
-import org.json4s.JNothing
 import org.json4s.JsonDSL._
+import org.json4s.jackson.Serialization.{read, write}
+import org.json4s.{DefaultFormats, JNothing}
 import scalaj.http.Http
+import sun.misc.{Signal, SignalHandler}
 
 import java.io._
 import java.nio.file.{Files, Path, Paths}
@@ -18,8 +19,6 @@ import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.io.Source
 import scala.reflect.runtime.universe.typeOf
 import scala.util.Random
-import sun.misc.SignalHandler
-import sun.misc.Signal
 
 case class Metrics(time: Long = 0,
                    itemsCount: Long = 0,
@@ -34,7 +33,7 @@ case class TestCrawler(requests: Int = 1,
                        fieldFrequency: Int = 100,
                        getCrawlerNames: Boolean = false)
 
-object TestCrawler extends App with SignalHandler{
+object TestCrawler extends App with SignalHandler {
   val name = "scala_test_crawler"
 
   val DEMO_URL = "https://demo-site.at.ispras.ru/"
@@ -47,18 +46,6 @@ object TestCrawler extends App with SignalHandler{
     Files.deleteIfExists(Path.of(fileName))
     Files.createFile(Path.of(fileName))
   }
-
-  /*Runtime.getRuntime().addShutdownHook(new Thread {
-    override def run = {
-      MessageWriter.writeMessage(MessageType.Log, "---------SHUTDOWN HOOK!!!!---------")
-      val jobDirPath = Paths.get("./scrapy_data")
-      val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath)
-      else jobDirPath
-      val pw = new PrintWriter(new File(s"$jobDir/test.txt"))
-      pw.write(s"${metrics.itemsCount}")
-      pw.close
-    }
-  })*/
 
   val SIGINT = "INT"
   val SIGTERM = "TERM"
@@ -81,18 +68,25 @@ object TestCrawler extends App with SignalHandler{
     System.exit(0)
   }
 
+  implicit val formats = DefaultFormats
+  val jobDirPathName = "./scrapy_data"
+
   // собственно обработчик
   override def handle(signal: Signal): Unit = {
     if (terminated.compareAndSet(false, true) && List(SIGINT, SIGTERM).contains(signal.getName)) {
-      MessageWriter.writeMessage(MessageType.Log, "---------SHUTDOWN HOOK!!!!---------")
-      val jobDirPath = Paths.get("/scrapy_data")
-      val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath)
-      else jobDirPath
-      val pw = new PrintWriter(new File(s"$jobDir/test.txt"))
-      pw.write(s"${metrics.itemsCount}")
-      pw.close
+      MessageWriter.writeMessage(MessageType.Log, "CRAWLER SHUTDOWN")
+      writeMetricsToFile(jobDirPathName)
       actorSystem.terminate()
     }
+  }
+
+  private def writeMetricsToFile(jobDirName: String): Unit = {
+    val jobDirPath = Paths.get(jobDirName)
+    val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath) else jobDirPath
+    val metricsJson = write(metrics)
+    val metricsOutputFile = new PrintWriter(new File(s"$jobDir/test.txt"))
+    metricsOutputFile.write(metricsJson)
+    metricsOutputFile.close()
   }
 
   val metricsNotifier = scheduler.scheduleAtFixedRate(initialDelay = Duration.ofMinutes(1), interval = Duration.ofMinutes(1),
@@ -128,6 +122,7 @@ object TestCrawler extends App with SignalHandler{
     } else {
       initCrawler(config)
       processEvents()
+      writeMetricsToFile(jobDirPathName)
     }
 
     metricsNotifier.cancel()
@@ -161,20 +156,30 @@ object TestCrawler extends App with SignalHandler{
       ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
     }
 
-    /** READ FROM FILE */
-    val filename = "/scrapy_data/test.txt"
-    try {
-      val bufferedSource = Source.fromFile(filename)
-      for (line <- bufferedSource.getLines) {
-        MessageWriter.writeMessage(MessageType.Log, f"Previous itemsCount: ${line}")
-      }
-      bufferedSource.close()
-    } catch {
-      case e: FileNotFoundException => MessageWriter.writeMessage(MessageType.Log, "Couldn't find that file.")
-      case e: IOException => MessageWriter.writeMessage(MessageType.Log, "Got an IOException!")
-    }
-
+    /** READ DATA FROM FILE IN JOBDIR */
+    val filename = jobDirPathName+"/test.txt"
+    loadDataFromJobDir(filename)
     MessageWriter.writeMessage(MessageType.Log, item)
+  }
+
+  /** READ DATA FROM FILE IN JOBDIR */
+  private def loadDataFromJobDir(filename: String): Unit = {
+    try {
+      val bufferedSourceMetricsFile = Source.fromFile(filename)
+      for (line <- bufferedSourceMetricsFile.getLines) {
+        MessageWriter.writeMessage(MessageType.Log, f"Resuming crawl. Previous run metrics: ${line}")
+        metrics = try {
+          read[Metrics](line)
+        }
+        catch {
+          case _: Throwable => metrics
+        }
+      }
+      bufferedSourceMetricsFile.close()
+    } catch {
+      case _: FileNotFoundException => MessageWriter.writeMessage(MessageType.Log, "Couldn't find JOBDIR file.")
+      case _: IOException => MessageWriter.writeMessage(MessageType.Log, "Got an IOException!")
+    }
   }
 
   private def createMetricsBody(finishTime: Instant, isCritical: Boolean = false) = {

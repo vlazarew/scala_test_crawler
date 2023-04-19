@@ -69,7 +69,6 @@ object TestCrawler extends App with SignalHandler {
   }
 
   implicit val formats = DefaultFormats
-  val jobDirPathName = "./scrapy_data"
 
   // собственно обработчик
   override def handle(signal: Signal): Unit = {
@@ -80,13 +79,16 @@ object TestCrawler extends App with SignalHandler {
     }
   }
 
+  /** write metrics to file in JOBDIR */
   private def writeMetricsToFile(jobDirName: String): Unit = {
-    val jobDirPath = Paths.get(jobDirName)
-    val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath) else jobDirPath
-    val metricsJson = write(metrics)
-    val metricsOutputFile = new PrintWriter(new File(s"$jobDir/test.txt"))
-    metricsOutputFile.write(metricsJson)
-    metricsOutputFile.close()
+    if (jobDirPathName.nonEmpty) {
+      val jobDirPath = Paths.get(jobDirName)
+      val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath) else jobDirPath
+      val metricsJson = write(metrics)
+      val metricsOutputFile = new PrintWriter(new File(s"$jobDir/saved_metrics.txt"))
+      metricsOutputFile.write(metricsJson)
+      metricsOutputFile.close()
+    }
   }
 
   val metricsNotifier = scheduler.scheduleAtFixedRate(initialDelay = Duration.ofMinutes(1), interval = Duration.ofMinutes(1),
@@ -99,6 +101,7 @@ object TestCrawler extends App with SignalHandler {
     .map(el => (el.name.toString.trim, el.typeSignature)).toMap
 
   val crawlerArgs = ArgsParser.parse(args, crawlerDefinition)
+  val jobDirPathName = crawlerArgs.getOrElse("JOBDIR", "").asInstanceOf[String]
   val config = getConfig(crawlerArgs)
 
   val delay = (config.workTime * 1000) / (config.requests + config.items + config.errors)
@@ -157,8 +160,10 @@ object TestCrawler extends App with SignalHandler {
     }
 
     /** READ DATA FROM FILE IN JOBDIR */
-    val filename = jobDirPathName+"/test.txt"
-    loadDataFromJobDir(filename)
+    if (jobDirPathName.nonEmpty) {
+      val filename = jobDirPathName + "/saved_metrics.txt"
+      loadDataFromJobDir(filename)
+    }
     MessageWriter.writeMessage(MessageType.Log, item)
   }
 
@@ -167,7 +172,7 @@ object TestCrawler extends App with SignalHandler {
     try {
       val bufferedSourceMetricsFile = Source.fromFile(filename)
       for (line <- bufferedSourceMetricsFile.getLines) {
-        MessageWriter.writeMessage(MessageType.Log, f"Resuming crawl. Previous run metrics: ${line}")
+        MessageWriter.writeMessage(MessageType.Log, s"Resuming crawl. Data loaded from $filename. Previous run metrics: $line")
         metrics = try {
           read[Metrics](line)
         }
@@ -177,7 +182,7 @@ object TestCrawler extends App with SignalHandler {
       }
       bufferedSourceMetricsFile.close()
     } catch {
-      case _: FileNotFoundException => MessageWriter.writeMessage(MessageType.Log, "Couldn't find JOBDIR file.")
+      case _: FileNotFoundException => MessageWriter.writeMessage(MessageType.Log, s"Couldn't find file in JOBDIR=$jobDirPathName")
       case _: IOException => MessageWriter.writeMessage(MessageType.Log, "Got an IOException!")
     }
   }

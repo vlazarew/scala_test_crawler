@@ -18,7 +18,7 @@ import scala.collection.mutable
 import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.io.Source
 import scala.reflect.runtime.universe.typeOf
-import scala.util.Random
+import scala.util.{Random, Try}
 
 case class Metrics(time: Long = 0,
                    itemsCount: Long = 0,
@@ -28,7 +28,7 @@ case class Metrics(time: Long = 0,
 case class TestCrawler(requests: Int = 1,
                        items: Int = 100,
                        errors: Int = 0,
-                       workTime: Int = 60,
+                       workTime: Int = 0,
                        fail: Boolean = false,
                        fieldFrequency: Int = 100,
                        getCrawlerNames: Boolean = false)
@@ -79,18 +79,6 @@ object TestCrawler extends App with SignalHandler {
     }
   }
 
-  /** write metrics to file in JOBDIR */
-  private def writeMetricsToFile(jobDirName: String): Unit = {
-    if (jobDirPathName.nonEmpty) {
-      val jobDirPath = Paths.get(jobDirName)
-      val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath) else jobDirPath
-      val metricsJson = write(metrics)
-      val metricsOutputFile = new PrintWriter(new File(s"$jobDir/saved_metrics.txt"))
-      metricsOutputFile.write(metricsJson)
-      metricsOutputFile.close()
-    }
-  }
-
   val metricsNotifier = scheduler.scheduleAtFixedRate(initialDelay = Duration.ofMinutes(1), interval = Duration.ofMinutes(1),
     runnable = () => {
       val metricsInfo = createMetricsBody(Instant.now())
@@ -101,7 +89,7 @@ object TestCrawler extends App with SignalHandler {
     .map(el => (el.name.toString.trim, el.typeSignature)).toMap
 
   val crawlerArgs = ArgsParser.parse(args, crawlerDefinition)
-  val jobDirPathName = crawlerArgs.getOrElse("JOBDIR", "").asInstanceOf[String]
+  val jobDirPathName = crawlerArgs.get("JOBDIR").asInstanceOf[Option[String]]
   val config = getConfig(crawlerArgs)
 
   val delay = (config.workTime * 1000) / (config.requests + config.items + config.errors)
@@ -137,7 +125,7 @@ object TestCrawler extends App with SignalHandler {
       requests = crawlerArgs.getOrElse("requests", 1).asInstanceOf[Int],
       items = crawlerArgs.getOrElse("items", 100).asInstanceOf[Int],
       errors = crawlerArgs.getOrElse("errors", 0).asInstanceOf[Int],
-      workTime = crawlerArgs.getOrElse("workTime", 60).asInstanceOf[Int],
+      workTime = crawlerArgs.getOrElse("workTime", 0).asInstanceOf[Int],
       fail = crawlerArgs.getOrElse("fail", false).asInstanceOf[Boolean],
       fieldFrequency = crawlerArgs.getOrElse("fieldFrequency", 100).asInstanceOf[Int],
       getCrawlerNames = crawlerArgs.getOrElse("getCrawlerNames", false).asInstanceOf[Boolean]
@@ -160,31 +148,41 @@ object TestCrawler extends App with SignalHandler {
     }
 
     /** READ DATA FROM FILE IN JOBDIR */
-    if (jobDirPathName.nonEmpty) {
-      val filename = jobDirPathName + "/saved_metrics.txt"
-      loadDataFromJobDir(filename)
+    jobDirPathName match {
+      case Some(jobDirPathValue) =>
+        val filename = jobDirPathValue + "/saved_metrics.txt"
+        loadDataFromJobDir(filename)
+      case None =>
     }
     MessageWriter.writeMessage(MessageType.Log, item)
   }
 
+  /** write metrics to file in JOBDIR */
+  private def writeMetricsToFile(jobDirName: Option[String]): Unit = {
+    jobDirName match {
+      case Some(jobDirNameValue) =>
+        val jobDirPath = Paths.get(jobDirNameValue)
+        val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath) else jobDirPath
+        val metricsJson = write(metrics)
+        val metricsOutputFile = new PrintWriter(new File(s"$jobDir/saved_metrics.txt"))
+        metricsOutputFile.write(metricsJson)
+        metricsOutputFile.close()
+      case None =>
+    }
+  }
+
   /** READ DATA FROM FILE IN JOBDIR */
   private def loadDataFromJobDir(filename: String): Unit = {
-    try {
+    Try {
       val bufferedSourceMetricsFile = Source.fromFile(filename)
       for (line <- bufferedSourceMetricsFile.getLines) {
         MessageWriter.writeMessage(MessageType.Log, s"Resuming crawl. Data loaded from $filename. Previous run metrics: $line")
-        metrics = try {
+        metrics = Try {
           read[Metrics](line)
-        }
-        catch {
-          case _: Throwable => metrics
-        }
+        }.fold(_ => metrics, readMetrics => readMetrics)
       }
       bufferedSourceMetricsFile.close()
-    } catch {
-      case _: FileNotFoundException => MessageWriter.writeMessage(MessageType.Log, s"Couldn't find file in JOBDIR=$jobDirPathName")
-      case _: IOException => MessageWriter.writeMessage(MessageType.Log, "Got an IOException!")
-    }
+    }.fold(_ => MessageWriter.writeMessage(MessageType.Log, s"Couldn't find file in JOBDIR=${jobDirPathName.get}"), result => result)
   }
 
   private def createMetricsBody(finishTime: Instant, isCritical: Boolean = false) = {

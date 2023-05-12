@@ -3,17 +3,22 @@ package crawler
 import akka.actor.ActorSystem
 import enums.{LogLevel, MessageType}
 import helpers.{ArgsParser, MessageWriter}
-import org.json4s.JNothing
 import org.json4s.JsonDSL._
+import org.json4s.jackson.Serialization.{read, write}
+import org.json4s.{DefaultFormats, JNothing}
 import scalaj.http.Http
+import sun.misc.{Signal, SignalHandler}
 
-import java.nio.file.{Files, Path}
+import java.io._
+import java.nio.file.{Files, Path, Paths}
 import java.time.{Duration, Instant}
+import java.util.concurrent.atomic.AtomicBoolean
 import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.io.Source
 import scala.reflect.runtime.universe.typeOf
-import scala.util.Random
+import scala.util.{Random, Try}
 
 case class Metrics(time: Long = 0,
                    itemsCount: Long = 0,
@@ -28,7 +33,7 @@ case class TestCrawler(requests: Int = 1,
                        fieldFrequency: Int = 100,
                        getCrawlerNames: Boolean = false)
 
-object TestCrawler extends App {
+object TestCrawler extends App with SignalHandler {
   val name = "scala_test_crawler"
 
   val DEMO_URL = "https://demo-site.at.ispras.ru/"
@@ -42,6 +47,14 @@ object TestCrawler extends App {
     Files.createFile(Path.of(fileName))
   }
 
+  val SIGINT = "INT"
+  val SIGTERM = "TERM"
+  val terminated = new AtomicBoolean(false)
+
+  // регистрируем сам App объект, как обработчик сигналов
+  Signal.handle(new Signal(SIGINT), this)
+  Signal.handle(new Signal(SIGTERM), this)
+
   var metrics = Metrics()
 
   val startCrawlTime = Instant.now()
@@ -49,6 +62,22 @@ object TestCrawler extends App {
   val actorSystem = ActorSystem()
   val scheduler = actorSystem.scheduler
   implicit val executor: ExecutionContextExecutor = actorSystem.dispatcher
+
+  //hook для akka, будет использоваться для любых остановок, не только по сигналам
+  actorSystem.registerOnTermination {
+    System.exit(0)
+  }
+
+  implicit val formats = DefaultFormats
+
+  // собственно обработчик
+  override def handle(signal: Signal): Unit = {
+    if (terminated.compareAndSet(false, true) && List(SIGINT, SIGTERM).contains(signal.getName)) {
+      MessageWriter.writeMessage(MessageType.Log, "CRAWLER SHUTDOWN")
+      writeMetricsToFile(jobDirPathName)
+      actorSystem.terminate()
+    }
+  }
 
   val metricsNotifier = scheduler.scheduleAtFixedRate(initialDelay = Duration.ofMinutes(1), interval = Duration.ofMinutes(1),
     runnable = () => {
@@ -60,6 +89,7 @@ object TestCrawler extends App {
     .map(el => (el.name.toString.trim, el.typeSignature)).toMap
 
   val crawlerArgs = ArgsParser.parse(args, crawlerDefinition)
+  val jobDirPathName = crawlerArgs.get("JOBDIR").asInstanceOf[Option[String]]
   val config = getConfig(crawlerArgs)
 
   val delay = (config.workTime * 1000) / (config.requests + config.items + config.errors)
@@ -83,6 +113,7 @@ object TestCrawler extends App {
     } else {
       initCrawler(config)
       processEvents()
+      writeMetricsToFile(jobDirPathName)
     }
 
     metricsNotifier.cancel()
@@ -116,7 +147,42 @@ object TestCrawler extends App {
       ("message" -> s"Spider run with config: $config") ~ ("level" -> LogLevel.INFO.toString) ~ ("timestamp" -> Instant.now().toEpochMilli)
     }
 
+    /** READ DATA FROM FILE IN JOBDIR */
+    jobDirPathName match {
+      case Some(jobDirPathValue) =>
+        val filename = jobDirPathValue + "/saved_metrics.txt"
+        loadDataFromJobDir(filename)
+      case None =>
+    }
     MessageWriter.writeMessage(MessageType.Log, item)
+  }
+
+  /** write metrics to file in JOBDIR */
+  private def writeMetricsToFile(jobDirName: Option[String]): Unit = {
+    jobDirName match {
+      case Some(jobDirNameValue) =>
+        val jobDirPath = Paths.get(jobDirNameValue)
+        val jobDir = if (!Files.exists(jobDirPath)) Files.createDirectory(jobDirPath) else jobDirPath
+        val metricsJson = write(metrics)
+        val metricsOutputFile = new PrintWriter(new File(s"$jobDir/saved_metrics.txt"))
+        metricsOutputFile.write(metricsJson)
+        metricsOutputFile.close()
+      case None =>
+    }
+  }
+
+  /** READ DATA FROM FILE IN JOBDIR */
+  private def loadDataFromJobDir(filename: String): Unit = {
+    Try {
+      val bufferedSourceMetricsFile = Source.fromFile(filename)
+      for (line <- bufferedSourceMetricsFile.getLines) {
+        MessageWriter.writeMessage(MessageType.Log, s"Resuming crawl. Data loaded from $filename. Previous run metrics: $line")
+        metrics = Try {
+          read[Metrics](line)
+        }.fold(_ => metrics, readMetrics => readMetrics)
+      }
+      bufferedSourceMetricsFile.close()
+    }.fold(_ => MessageWriter.writeMessage(MessageType.Log, s"Couldn't find file in JOBDIR=${jobDirPathName.get}"), result => result)
   }
 
   private def createMetricsBody(finishTime: Instant, isCritical: Boolean = false) = {
